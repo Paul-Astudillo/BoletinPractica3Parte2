@@ -111,11 +111,11 @@ public class MainActivity extends AppCompatActivity {
             Bundle extras = data.getExtras();
             Bitmap imageBitmap = (Bitmap) extras.get("data");
 
-            // Ajustar el tamaño del Bitmap
+
             int width = imageBitmap.getWidth();
             int height = imageBitmap.getHeight();
-            int newWidth = width * 3; // Aumentar el tamaño a tu preferencia
-            int newHeight = height * 3; // Aumentar el tamaño a tu preferencia
+            int newWidth = width * 3;
+            int newHeight = height * 3;
             Bitmap resizedBitmap = Bitmap.createScaledBitmap(imageBitmap, newWidth, newHeight, false);
 
             foto.setImageBitmap(resizedBitmap);
@@ -124,11 +124,11 @@ public class MainActivity extends AppCompatActivity {
             try {
                 Bitmap imageBitmap = MediaStore.Images.Media.getBitmap(this.getContentResolver(), selectedImage);
 
-                // Ajustar el tamaño del Bitmap
+
                 int width = imageBitmap.getWidth();
                 int height = imageBitmap.getHeight();
-                int newWidth = width * 3; // Aumentar el tamaño a tu preferencia
-                int newHeight = height * 3; // Aumentar el tamaño a tu preferencia
+                int newWidth = width * 3;
+                int newHeight = height * 3;
                 Bitmap resizedBitmap = Bitmap.createScaledBitmap(imageBitmap, newWidth, newHeight, false);
 
                 foto.setImageBitmap(resizedBitmap);
@@ -150,7 +150,7 @@ public class MainActivity extends AppCompatActivity {
             out.flush();
             out.close();
 
-            // Verificar si el archivo fue copiado correctamente
+
             File file = new File(outFileName);
             if (file.exists()) {
                 Log.d(TAG, "El archivo " + filename + " fue copiado exitosamente a " + outFileName);

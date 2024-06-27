@@ -120,7 +120,7 @@ Java_com_example_boletinpractica3parte2_MainActivity_initModelPath(
     svmModelPath = std::string(modelPathChars);
     env->ReleaseStringUTFChars(modelPath, modelPathChars);
     LOGI("Ruta del modelo SVM: %s", svmModelPath.c_str());
-    
+
     std::ifstream file(svmModelPath);
     if (file.good()) {
         LOGI("El archivo %s existe.", svmModelPath.c_str());
