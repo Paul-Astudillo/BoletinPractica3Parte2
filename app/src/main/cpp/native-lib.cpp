@@ -2,219 +2,158 @@
 #include <string>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/dnn.hpp>
-#include <opencv2/video.hpp>
-#include "android/bitmap.h"
-#include <cstring>
-#include <vector>
-#include <iostream>
+#include <opencv2/ml.hpp>
+#include <android/bitmap.h>
+#include <fstream>
+#include <android/log.h>
+
+#define LOG_TAG "NativeCode"
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 using namespace std;
 using namespace cv;
+using namespace cv::ml;
+
+std::string svmModelPath;
 
 void bitmapToMat(JNIEnv * env, jobject bitmap, cv::Mat &dst, jboolean needUnPremultiplyAlpha) {
     AndroidBitmapInfo info;
     void* pixels = 0;
     try {
-        CV_Assert( AndroidBitmap_getInfo(env, bitmap, &info) >= 0 );
-        CV_Assert( info.format == ANDROID_BITMAP_FORMAT_RGBA_8888 ||
-                   info.format == ANDROID_BITMAP_FORMAT_RGB_565 );
-        CV_Assert( AndroidBitmap_lockPixels(env, bitmap, &pixels) >= 0 );
-        CV_Assert( pixels );
+        CV_Assert(AndroidBitmap_getInfo(env, bitmap, &info) >= 0);
+        CV_Assert(info.format == ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+                  info.format == ANDROID_BITMAP_FORMAT_RGB_565);
+        CV_Assert(AndroidBitmap_lockPixels(env, bitmap, &pixels) >= 0);
+        CV_Assert(pixels);
         dst.create(info.height, info.width, CV_8UC4);
-        if( info.format == ANDROID_BITMAP_FORMAT_RGBA_8888 ) {
+        if (info.format == ANDROID_BITMAP_FORMAT_RGBA_8888) {
             cv::Mat tmp(info.height, info.width, CV_8UC4, pixels);
-            if(needUnPremultiplyAlpha) cvtColor(tmp, dst, cv::COLOR_mRGBA2RGBA);
+            if (needUnPremultiplyAlpha) cvtColor(tmp, dst, cv::COLOR_mRGBA2RGBA);
             else tmp.copyTo(dst);
         } else {
-            // info.format == ANDROID_BITMAP_FORMAT_RGB_565
             cv::Mat tmp(info.height, info.width, CV_8UC2, pixels);
             cvtColor(tmp, dst, cv::COLOR_BGR5652RGBA);
         }
         AndroidBitmap_unlockPixels(env, bitmap);
         return;
-    } catch(const cv::Exception& e) {
+    } catch (const cv::Exception& e) {
         AndroidBitmap_unlockPixels(env, bitmap);
         jclass je = env->FindClass("java/lang/Exception");
         env->ThrowNew(je, e.what());
+        LOGE("Exception in bitmapToMat: %s", e.what());
         return;
     } catch (...) {
         AndroidBitmap_unlockPixels(env, bitmap);
         jclass je = env->FindClass("java/lang/Exception");
-        env->ThrowNew(je, "Unknown exception in JNI code {nBitmapToMat}");
+        env->ThrowNew(je, "Unknown exception in JNI code {bitmapToMat}");
+        LOGE("Unknown exception in bitmapToMat");
         return;
     }
 }
 
-void matToBitmap(JNIEnv * env, cv::Mat src, jobject bitmap, jboolean needPremultiplyAlpha) {
-    AndroidBitmapInfo info;
-    void* pixels = 0;
-    try {
-        CV_Assert( AndroidBitmap_getInfo(env, bitmap, &info) >= 0 );
-        CV_Assert( info.format == ANDROID_BITMAP_FORMAT_RGBA_8888 ||
-                   info.format == ANDROID_BITMAP_FORMAT_RGB_565 );
-        CV_Assert( src.dims == 2 && info.height == (uint32_t)src.rows && info.width == (uint32_t)src.cols );
-        CV_Assert( src.type() == CV_8UC1 || src.type() == CV_8UC3 || src.type() == CV_8UC4 );
-        CV_Assert( AndroidBitmap_lockPixels(env, bitmap, &pixels) >= 0 );
-        CV_Assert( pixels );
-        if( info.format == ANDROID_BITMAP_FORMAT_RGBA_8888 ) {
-            cv::Mat tmp(info.height, info.width, CV_8UC4, pixels);
-            if(src.type() == CV_8UC1) {
-                cvtColor(src, tmp, cv::COLOR_GRAY2RGBA);
-            } else if(src.type() == CV_8UC3) {
-                cvtColor(src, tmp, cv::COLOR_RGB2RGBA);
-            } else if(src.type() == CV_8UC4) {
-                if(needPremultiplyAlpha) cvtColor(src, tmp, cv::COLOR_RGBA2mRGBA);
-                else src.copyTo(tmp);
-            }
-        } else {
-            // info.format == ANDROID_BITMAP_FORMAT_RGB_565
-            cv::Mat tmp(info.height, info.width, CV_8UC2, pixels);
-            if(src.type() == CV_8UC1) {
-                cvtColor(src, tmp, cv::COLOR_GRAY2BGR565);
-            } else if(src.type() == CV_8UC3) {
-                cvtColor(src, tmp, cv::COLOR_RGB2BGR565);
-            } else if(src.type() == CV_8UC4) {
-                cvtColor(src, tmp, cv::COLOR_RGBA2BGR565);
-            }
+cv::Mat calculateLBP(const cv::Mat& src) {
+    cv::Mat lbp_image;
+    src.convertTo(lbp_image, CV_32F);
+
+    for (int i = 1; i < src.rows - 1; i++) {
+        for (int j = 1; j < src.cols - 1; j++) {
+            uchar center = src.at<uchar>(i, j);
+            unsigned char code = 0;
+            code |= (src.at<uchar>(i - 1, j - 1) > center) << 7;
+            code |= (src.at<uchar>(i - 1, j) > center) << 6;
+            code |= (src.at<uchar>(i - 1, j + 1) > center) << 5;
+            code |= (src.at<uchar>(i, j + 1) > center) << 4;
+            code |= (src.at<uchar>(i + 1, j + 1) > center) << 3;
+            code |= (src.at<uchar>(i + 1, j) > center) << 2;
+            code |= (src.at<uchar>(i + 1, j - 1) > center) << 1;
+            code |= (src.at<uchar>(i, j - 1) > center) << 0;
+            lbp_image.at<float>(i, j) = code;
         }
-        AndroidBitmap_unlockPixels(env, bitmap);
-        return;
-    } catch(const cv::Exception& e) {
-        AndroidBitmap_unlockPixels(env, bitmap);
-        jclass je = env->FindClass("java/lang/Exception");
-        env->ThrowNew(je, e.what());
-        return;
-    } catch (...) {
-        AndroidBitmap_unlockPixels(env, bitmap);
-        jclass je = env->FindClass("java/lang/Exception");
-        env->ThrowNew(je, "Unknown exception in JNI code {nMatToBitmap}");
-        return;
+    }
+
+    return lbp_image;
+}
+
+cv::Mat calculateLBPHistogram(const cv::Mat& lbp_image) {
+    int histSize = 256; // LBP produces 256 possible values
+    float range[] = {0, 256}; // Range of LBP values
+    const float* histRange = {range};
+
+    cv::Mat hist;
+    cv::calcHist(&lbp_image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
+    cv::normalize(hist, hist, 0, 1, cv::NORM_MINMAX, -1, cv::Mat());
+
+    return hist;
+}
+
+std::string predictImage(const cv::Mat& image, cv::Ptr<cv::ml::SVM> svm) {
+    cv::Mat lab_image;
+    cv::cvtColor(image, lab_image, cv::COLOR_BGR2Lab);
+
+    std::vector<cv::Mat> lab_planes;
+    cv::split(lab_image, lab_planes);
+
+    cv::Mat lbp_image = calculateLBP(lab_planes[0]);
+    cv::Mat hist = calculateLBPHistogram(lbp_image);
+
+    hist = hist.reshape(1, 1);
+    int response = svm->predict(hist);
+
+    LOGI("Predicted response: %d", response);
+
+    if (response == 0) {
+        return "Roca";
+    } else {
+        return "Madera";
     }
 }
 
-#define compab_mask_inc(ptr,shift) \
-{ value |= ((unsigned int)(cntr - *ptr) & 0x80000000) >> (31-shift); ptr++; }
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_boletinpractica3parte2_MainActivity_initModelPath(
+        JNIEnv* env,
+        jobject /* this */,
+        jstring modelPath) {
+    const char *modelPathChars = env->GetStringUTFChars(modelPath, 0);
+    svmModelPath = std::string(modelPathChars);
+    env->ReleaseStringUTFChars(modelPath, modelPathChars);
+    LOGI("Ruta del modelo SVM: %s", svmModelPath.c_str());
 
-class LBP {
-private:
-    int* LBP8(const int* , int , int);
-public:
-    LBP();
-    vector<int> calcularLBP(Mat);
-    Mat calcularLBPImage(Mat imagen);
-};
-
-LBP::LBP() {}
-
-int* LBP::LBP8(const int* data, int rows, int columns) {
-    const int
-            *p0 = data,
-            *p1 = p0 + 1,
-            *p2 = p1 + 1,
-            *p3 = p2 + columns,
-            *p4 = p3 + columns,
-            *p5 = p4 - 1,
-            *p6 = p5 - 1,
-            *p7 = p6 - columns,
-            *center = p7 + 1;
-    int r,c,cntr;
-    unsigned int value;
-    int* result = (int*)malloc(256*sizeof(int));
-    memset(result, 0, 256*sizeof(int));
-    for (r=0;r<rows-2;r++){
-        for (c=0;c<columns-2;c++){
-            value = 0;
-            cntr = *center - 1;
-            compab_mask_inc(p0,0);
-            compab_mask_inc(p1,1);
-            compab_mask_inc(p2,2);
-            compab_mask_inc(p3,3);
-            compab_mask_inc(p4,4);
-            compab_mask_inc(p5,5);
-            compab_mask_inc(p6,6);
-            compab_mask_inc(p7,7);
-            center++;
-            result[value]++;
-        }
-        p0 += 2;
-        p1 += 2;
-        p2 += 2;
-        p3 += 2;
-        p4 += 2;
-        p5 += 2;
-        p6 += 2;
-        p7 += 2;
-        center += 2;
+    // Verificar si el archivo existe
+    std::ifstream file(svmModelPath);
+    if (file.good()) {
+        LOGI("El archivo %s existe.", svmModelPath.c_str());
+    } else {
+        LOGE("El archivo %s no existe.", svmModelPath.c_str());
     }
-    return result;
 }
 
-vector<int> LBP::calcularLBP(Mat imagen) {
-    int *datos = (int *) malloc(imagen.rows*imagen.cols*sizeof(int));
-    for(int i=0,k=0;i<imagen.rows;i++){
-        for(int j=0;j<imagen.cols;j++){
-            datos[k++] = imagen.at<uchar>(i,j);
-        }
-    }
-
-    int *res = this->LBP8(datos, imagen.rows, imagen.cols);
-    vector<int> histo;
-    for(int i=0;i<256;i++){
-        histo.push_back(res[i]);
-    }
-
-    free(datos);
-    free(res);
-    return histo;
-}
-
-Mat LBP::calcularLBPImage(Mat imagen) {
-    Mat lbpImage = Mat::zeros(imagen.rows, imagen.cols, CV_8UC1);
-
-    int *datos = (int *) malloc(imagen.rows * imagen.cols * sizeof(int));
-    if (!datos) {
-        cerr << "Error al asignar memoria" << endl;
-        return lbpImage; // Devolver una imagen vacía en caso de error
-    }
-
-    for(int i = 0, k = 0; i < imagen.rows; i++) {
-        for(int j = 0; j < imagen.cols; j++) {
-            datos[k++] = imagen.at<uchar>(i, j);
-        }
-    }
-
-    int *res = this->LBP8(datos, imagen.rows, imagen.cols);
-    if (!res) {
-        cerr << "Error al calcular LBP" << endl;
-        free(datos);
-        return lbpImage; // Devolver una imagen vacía en caso de error
-    }
-
-    for(int r = 0; r < imagen.rows - 2; r++) {
-        for(int c = 0; c < imagen.cols - 2; c++) {
-            lbpImage.at<uchar>(r + 1, c + 1) = res[(r * (imagen.cols - 2)) + c];
-        }
-    }
-
-    free(datos);
-    free(res);
-
-    return lbpImage;
-}
-
-extern "C"
-JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_boletinpractica3parte2_MainActivity_lbp(
         JNIEnv* env,
         jobject /* this */,
-        jobject fotoObj) {
-
+        jobject bitmap) {
     Mat fotoMat;
-    bitmapToMat(env, fotoObj, fotoMat, false);
+    bitmapToMat(env, bitmap, fotoMat, false);
 
-    LBP lbp;
-    Mat lbpImage = lbp.calcularLBPImage(fotoMat);
+    // Asegúrate de que la imagen sea de tamaño adecuado
+    cv::resize(fotoMat, fotoMat, cv::Size(256, 256));
+    LOGI("Imagen convertida a Mat y redimensionada.");
 
-    matToBitmap(env, lbpImage, fotoObj, false);
+    // Cargar el modelo SVM desde la ruta previamente inicializada
+    cv::Ptr<cv::ml::SVM> svm = cv::ml::SVM::load(svmModelPath);
+    if (svm.empty()) {
+        jclass je = env->FindClass("java/lang/Exception");
+        env->ThrowNew(je, "No se pudo cargar el modelo SVM");
+        LOGE("No se pudo cargar el modelo SVM desde la ruta: %s", svmModelPath.c_str());
+        return nullptr;
+    }
+
+    std::string category = predictImage(fotoMat, svm);
+    LOGI("Categoría predicha: %s", category.c_str());
+
+    // Devolver solo la categoría predicha
+    return env->NewStringUTF(category.c_str());
 }
