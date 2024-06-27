@@ -120,8 +120,7 @@ Java_com_example_boletinpractica3parte2_MainActivity_initModelPath(
     svmModelPath = std::string(modelPathChars);
     env->ReleaseStringUTFChars(modelPath, modelPathChars);
     LOGI("Ruta del modelo SVM: %s", svmModelPath.c_str());
-
-    // Verificar si el archivo existe
+    
     std::ifstream file(svmModelPath);
     if (file.good()) {
         LOGI("El archivo %s existe.", svmModelPath.c_str());
@@ -137,12 +136,10 @@ Java_com_example_boletinpractica3parte2_MainActivity_lbp(
         jobject bitmap) {
     Mat fotoMat;
     bitmapToMat(env, bitmap, fotoMat, false);
-
-    // Asegúrate de que la imagen sea de tamaño adecuado
     cv::resize(fotoMat, fotoMat, cv::Size(256, 256));
     LOGI("Imagen convertida a Mat y redimensionada.");
 
-    // Cargar el modelo SVM desde la ruta previamente inicializada
+    //Cargar el modelo SVM
     cv::Ptr<cv::ml::SVM> svm = cv::ml::SVM::load(svmModelPath);
     if (svm.empty()) {
         jclass je = env->FindClass("java/lang/Exception");
@@ -154,6 +151,5 @@ Java_com_example_boletinpractica3parte2_MainActivity_lbp(
     std::string category = predictImage(fotoMat, svm);
     LOGI("Categoría predicha: %s", category.c_str());
 
-    // Devolver solo la categoría predicha
     return env->NewStringUTF(category.c_str());
 }
